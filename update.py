@@ -169,7 +169,7 @@ for article_data in sorted_articles:
 
 def create_github_issue(title, body, access_token):
     # 修改为您自己的仓库信息
-    url = f"https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/issues"
+    url = f"https://api.github.com/repos/HushWay/TrackResearch/issues"
     headers = {
         "Authorization": f"token {access_token}",
         "Accept": "application/vnd.github.v3+json"
