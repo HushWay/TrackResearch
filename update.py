@@ -119,7 +119,7 @@ def main():
             "relevance_score": relevance_score,
             "doi": doi,
             "link": link,
-            "abstract": abstract[:200] + "..." if len(abstract) > 200 else abstract  # 保存摘要摘录
+            "abstract": abstract  
         })
     
     # 按相关性分数排序并只保留前10篇
