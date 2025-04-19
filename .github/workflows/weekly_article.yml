@@ -1,4 +1,9 @@
 name: Weekly BioInfo Articles
+
+permissions:
+  issues: write
+  contents: read
+
 on:
   schedule:
     - cron: '0 0 * * 0'  # 每周日运行
@@ -22,5 +27,5 @@ jobs:
       - name: Run Python Script
         run: python update.py
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.TRACKRESEARCH_ACCESS_TOKEN }}
           AIZEX_API_KEY: ${{ secrets.AIZEX_API_KEY }}
