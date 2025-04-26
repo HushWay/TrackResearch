@@ -31,7 +31,6 @@ jobs:
           GITHUB_TOKEN:      ${{ secrets.TRACKRESEARCH_ACCESS_TOKEN }}
           AIZEX_API_KEY:     ${{ secrets.AIZEX_API_KEY }}
           NCBI_API_KEY:      ${{ secrets.NCBI_API_KEY }}
-          ENTREZ_EMAIL:      ${{ secrets.ENTREZ_EMAIL }}
         run: |
           # 如果脚本里用了 python-dotenv，则会自动从 .env 读取；
           # 否则在代码中用 os.getenv("ENTREZ_EMAIL") 直接获取。

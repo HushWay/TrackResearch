@@ -140,10 +140,15 @@ def fetch_europe_pmc(days=7, pageSize=100):
 
 def fetch_arxiv(max_results=100):
     """ArXiv 抓取 q-bio 相关预印本"""
-    query = "cat:q-bio*+AND+(" + "+OR+".join([t.split("[")[0] for t in TIAB_TERMS]) + ")"
+    # 先获取关键词列表，去掉[tiab]标记
+    terms = [t.split("[")[0] for t in TIAB_TERMS]
+    
+    # 使用 requests.utils.quote 对整个查询进行编码
+    raw_query = "cat:q-bio*+AND+(" + "+OR+".join([requests.utils.quote(term) for term in terms]) + ")"
+    
     url = (
         "http://export.arxiv.org/api/query"
-        f"?search_query={query}"
+        f"?search_query={raw_query}"
         f"&start=0&max_results={max_results}"
         "&sortBy=submittedDate&sortOrder=descending"
     )
