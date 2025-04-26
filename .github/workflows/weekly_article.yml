@@ -2,24 +2,37 @@ name: 肿瘤演化研究速递
 permissions:
   issues: write
   contents: read
+
 on:
   schedule:
-    - cron: '0 0 * * 0'  # 每周日运行
+    - cron: '0 0 * * 0'    # 每周日 UTC 00:00 运行
   workflow_dispatch:
+
 jobs:
   run_script:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+
       - name: Install Dependencies
-        run: pip install feedparser requests openai
-      - name: Run Python Script
-        run: python update.py
+        run: |
+          pip install feedparser requests openai biopython python-dotenv
+
+      - name: Run update.py
         env:
-          GITHUB_TOKEN: ${{ secrets.TRACKRESEARCH_ACCESS_TOKEN }}
-          AIZEX_API_KEY: ${{ secrets.AIZEX_API_KEY }}
+          # GitHub 自动注入 GITHUB_TOKEN，但这里用自定义的 TRACKRESEARCH_ACCESS_TOKEN 也行
+          GITHUB_TOKEN:      ${{ secrets.TRACKRESEARCH_ACCESS_TOKEN }}
+          AIZEX_API_KEY:     ${{ secrets.AIZEX_API_KEY }}
+          NCBI_API_KEY:      ${{ secrets.NCBI_API_KEY }}
+          ENTREZ_EMAIL:      ${{ secrets.ENTREZ_EMAIL }}
+        run: |
+          # 如果脚本里用了 python-dotenv，则会自动从 .env 读取；
+          # 否则在代码中用 os.getenv("ENTREZ_EMAIL") 直接获取。
+          python update.py
