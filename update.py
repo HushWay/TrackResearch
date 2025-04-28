@@ -13,7 +13,7 @@ from openai import OpenAI
 Entrez.email = "shehuizhuyitese@gmail.com"           # 必填
 Entrez.api_key = os.getenv("NCBI_API_KEY")           # 可选，加快并发
 AIZEX_API_KEY = os.getenv("AIZEX_API_KEY")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_TOKEN   = os.getenv("GITHUB_TOKEN")
 
 client = OpenAI(
     api_key=AIZEX_API_KEY,
@@ -23,17 +23,16 @@ client = OpenAI(
 # ========== 日志配置 ==========
 import logging
 logging.basicConfig(
-    level=logging.INFO, 
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("update.log", mode='a'), 
+        logging.FileHandler("update.log", mode='a'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 # ========== 检索配置 ==========
-# TIAB 关键词和 MeSH 词列表
 TIAB_TERMS = [
     "cancer[tiab]", "tumor[tiab]",
     "evolution[tiab]", "clonal heterogeneity[tiab]",
@@ -45,7 +44,6 @@ MESH_TERMS = [
 ]
 
 def build_pubmed_query():
-    """构造 PubMed E-utilities 查询语句"""
     tiab = " OR ".join(TIAB_TERMS)
     mesh = " OR ".join(MESH_TERMS)
     return f"({tiab}) OR ({mesh})"
@@ -147,7 +145,6 @@ def update_cache_with_scores(articles, cache_file="article_cache.json"):
 
 # ========== 文献抓取 ==========
 def fetch_pubmed(months_back=1, retmax=100):
-    """深度检索：过去 months_back 个月内所有匹配条目"""
     logger.info(f"开始深度检索PubMed, 时间范围: {months_back}个月, 最大数量: {retmax}")
     try:
         end = datetime.utcnow()
@@ -166,8 +163,7 @@ def fetch_pubmed(months_back=1, retmax=100):
         if not pmids:
             logger.warning("深度检索未找到结果")
             return []
-        
-        # 批量 efetch
+
         fetch = Entrez.efetch(
             db="pubmed",
             id=",".join(pmids),
@@ -180,18 +176,85 @@ def fetch_pubmed(months_back=1, retmax=100):
             art["title"] = article.findtext(".//ArticleTitle") or ""
             art["abstract"] = "".join([t.text or "" for t in article.findall(".//AbstractText")])
             art["doi"] = article.findtext(".//ArticleId[@IdType='doi']") or ""
-            art["link"] = f"https://pubmed.ncbi.nlm.nih.gov/{article.findtext('.//PMID')}/"
-            art["pub_date"] = article.findtext(".//PubDate/Year") or ""
+            pmid = article.findtext(".//PMID")
+            art["link"] = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else ""
+            # 提取杂志名
+            art["journal"] = (
+                article.findtext(".//Journal/Title")
+                or article.findtext(".//MedlineJournalInfo/JournalTitle")
+                or ""
+            )
+            # 提取完整日期
+            pubdate = article.find(".//PubDate")
+            if pubdate is not None:
+                year  = pubdate.findtext("Year") or ""
+                month = pubdate.findtext("Month") or ""
+                day   = pubdate.findtext("Day") or ""
+                dt = None
+                try:
+                    dt = datetime.strptime(f"{year} {month} {day}", "%Y %b %d")
+                except:
+                    try:
+                        dt = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+                    except:
+                        dt = None
+                art["pub_date"] = dt.strftime("%Y-%m-%d") if dt else year
+            else:
+                art["pub_date"] = ""
             results.append(art)
-        
+
         logger.info(f"深度检索完成，获取了 {len(results)} 篇文章")
         return results
     except Exception as e:
         logger.error(f"深度检索出错: {str(e)}")
         return []
 
+def fetch_pubmed_from_pmids(pmids):
+    if not pmids:
+        return []
+    try:
+        fetch = Entrez.efetch(
+            db="pubmed",
+            id=",".join(pmids),
+            rettype="xml"
+        )
+        root = ET.fromstring(fetch.read())
+        results = []
+        for article in root.findall(".//PubmedArticle"):
+            art = {}
+            art["title"] = article.findtext(".//ArticleTitle") or ""
+            art["abstract"] = "".join([t.text or "" for t in article.findall(".//AbstractText")])
+            art["doi"] = article.findtext(".//ArticleId[@IdType='doi']") or ""
+            pmid = article.findtext(".//PMID")
+            art["link"] = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else ""
+            art["journal"] = (
+                article.findtext(".//Journal/Title")
+                or article.findtext(".//MedlineJournalInfo/JournalTitle")
+                or ""
+            )
+            pubdate = article.find(".//PubDate")
+            if pubdate is not None:
+                year  = pubdate.findtext("Year") or ""
+                month = pubdate.findtext("Month") or ""
+                day   = pubdate.findtext("Day") or ""
+                dt = None
+                try:
+                    dt = datetime.strptime(f"{year} {month} {day}", "%Y %b %d")
+                except:
+                    try:
+                        dt = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+                    except:
+                        dt = None
+                art["pub_date"] = dt.strftime("%Y-%m-%d") if dt else year
+            else:
+                art["pub_date"] = ""
+            results.append(art)
+        return results
+    except Exception as e:
+        logger.error(f"从PMID获取文章详情失败: {str(e)}")
+        return []
+
 def fetch_trending_pubmed(days=7, retmax=100):
-    """寻新检索：过去 days 天内最新条目（RSS 或 E-utilities）"""
     logger.info(f"开始寻新检索PubMed, 时间范围: {days}天, 最大数量: {retmax}")
     try:
         end = datetime.utcnow()
@@ -214,33 +277,7 @@ def fetch_trending_pubmed(days=7, retmax=100):
         logger.error(f"寻新检索出错: {str(e)}")
         return []
 
-def fetch_pubmed_from_pmids(pmids):
-    """辅助：给定 pmid 列表，批量获取详细信息"""
-    if not pmids: 
-        return []
-    try:
-        fetch = Entrez.efetch(
-            db="pubmed",
-            id=",".join(pmids),
-            rettype="xml"
-        )
-        root = ET.fromstring(fetch.read())
-        results = []
-        for article in root.findall(".//PubmedArticle"):
-            art = {}
-            art["title"] = article.findtext(".//ArticleTitle") or ""
-            art["abstract"] = "".join([t.text or "" for t in article.findall(".//AbstractText")])
-            art["doi"] = article.findtext(".//ArticleId[@IdType='doi']") or ""
-            art["link"] = f"https://pubmed.ncbi.nlm.nih.gov/{article.findtext('.//PMID')}/"
-            art["pub_date"] = article.findtext(".//PubDate/Year") or ""
-            results.append(art)
-        return results
-    except Exception as e:
-        logger.error(f"从PMID获取文章详情失败: {str(e)}")
-        return []
-
 def fetch_europe_pmc(days=7, pageSize=100):
-    """Europe PMC 抓取 bioRxiv/medRxiv 等预印本和已发表文章"""
     logger.info(f"开始检索Europe PMC, 时间范围: {days}天, 最大数量: {pageSize}")
     try:
         end = datetime.utcnow().strftime("%Y-%m-%d")
@@ -263,7 +300,9 @@ def fetch_europe_pmc(days=7, pageSize=100):
                 "abstract": item.get("abstractText", ""),
                 "doi": item.get("doi", ""),
                 "link": item.get("fullTextUrlList", {}).get("fullTextUrl", [{}])[0].get("url", ""),
-                "pub_date": item.get("firstPublicationDate", "")
+                # Europe PMC 本身已提供 YYYY-MM-DD 格式
+                "pub_date": item.get("firstPublicationDate", ""),
+                "journal": item.get("journalTitle", "")
             }
             results.append(art)
         logger.info(f"Europe PMC检索完成，获取了 {len(results)} 篇文章")
@@ -291,12 +330,14 @@ def fetch_arxiv(max_results=100):
         feed = feedparser.parse(url)
         results = []
         for entry in feed.entries:
+            journal_ref = entry.get('arxiv_journal_ref', '')
             art = {
                 "title": entry.title,
                 "abstract": entry.summary,
                 "doi": next((l.href for l in entry.links if l.href.startswith("http://dx.doi.org/")), ""),
                 "link": entry.link,
-                "pub_date": entry.published[:10]
+                "pub_date": entry.published[:10],
+                "journal": journal_ref or "arXiv"
             }
             results.append(art)
         logger.info(f"ArXiv检索完成，获取了 {len(results)} 篇文章")
@@ -453,7 +494,6 @@ def batch_extract_relevance_scores(articles, batch_size=5, max_retries=3, backof
 
 # ========== GitHub Issue ==========
 def create_github_issue(title, body):
-    """创建GitHub Issue，添加错误处理"""
     try:
         url = "https://api.github.com/repos/HushWay/TrackResearch/issues"
         headers = {
@@ -484,87 +524,61 @@ def main():
 
         all_articles = deep + new_pm + new_ep + new_ax
         logger.info(f"总抓取文章数: {len(all_articles)}")
-        
-        # 添加去重逻辑
+
         unique_articles = []
         seen_titles = set()
         for art in all_articles:
-            # 简单的标题规范化：转小写并移除空格
-            normalized_title = normalize_string(art.get("title", ""))
-            if normalized_title and normalized_title not in seen_titles:
-                seen_titles.add(normalized_title)
+            norm = normalize_string(art.get("title", ""))
+            if norm and norm not in seen_titles:
+                seen_titles.add(norm)
                 unique_articles.append(art)
-        
         logger.info(f"去重后文章数: {len(unique_articles)}")
-        
-        # 与缓存合并，避免重复打分
+
         merged_articles, new_count = merge_with_cache(unique_articles)
-        
-        # 只处理新文章进行打分
+
         if new_count > 0:
-            # 使用关键词预过滤新文章
-            new_articles = [art for art in merged_articles if "score" not in art]
-            filtered_new_articles = simple_keyword_filter(new_articles, threshold=2)
-            
-            # 如果预过滤后文章太少，调整阈值重新过滤
-            if len(filtered_new_articles) < 10:
-                filtered_new_articles = simple_keyword_filter(new_articles, threshold=1)
-            
-            # 如果还是少于10篇，则使用所有文章
-            if len(filtered_new_articles) < 10:
-                filtered_new_articles = new_articles
-            
-            logger.info(f"需要打分的新文章: {len(filtered_new_articles)}")
-            
-            # 批量打分
-            if filtered_new_articles:
-                batch_extract_relevance_scores(
-                    filtered_new_articles, 
-                    batch_size=5,  # 每次处理5篇文章
-                    max_retries=3, 
-                    backoff_factor=2
-                )
-                
-                # 更新打分后的文章到缓存
-                for art in filtered_new_articles:
+            new_articles = [a for a in merged_articles if "score" not in a]
+            filtered = simple_keyword_filter(new_articles, threshold=2)
+            if len(filtered) < 10:
+                filtered = simple_keyword_filter(new_articles, threshold=1)
+            if len(filtered) < 10:
+                filtered = new_articles
+            logger.info(f"需要打分的新文章: {len(filtered)}")
+            if filtered:
+                batch_extract_relevance_scores(filtered, batch_size=5, max_retries=3, backoff_factor=2)
+                for art in filtered:
                     if "score" in art:
-                        # 在合并列表中更新分数
-                        for merged_art in merged_articles:
-                            if normalize_string(merged_art.get("title", "")) == normalize_string(art.get("title", "")):
-                                merged_art["score"] = art["score"]
-                
-                # 更新缓存
-                update_cache_with_scores(filtered_new_articles)
-        
-        # 确保所有文章都有分数
+                        for m in merged_articles:
+                            if normalize_string(m.get("title","")) == normalize_string(art.get("title","")):
+                                m["score"] = art["score"]
+                update_cache_with_scores(filtered)
+
         for art in merged_articles:
             if "score" not in art:
                 art["score"] = 0
-        
-        # 排序并选择前10篇
-        top10 = sorted(merged_articles, key=lambda x: x.get("score", 0), reverse=True)[:10]
 
-        # 准备 GitHub Issue
-        today = datetime.now().strftime("%Y-%m-%d")
+        top10 = sorted(merged_articles, key=lambda x: x.get("score",0), reverse=True)[:10]
+
+        today    = datetime.now().strftime("%Y-%m-%d")
         week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-        title = f"肿瘤克隆演化综述 ({week_ago} 至 {today})"
-        body = f"## {week_ago} – {today} 最相关 Top10：\n\n"
+        title = f"肿瘤克隆演化研究周报 ({week_ago} 至 {today})"
+        body  = f"## {week_ago} – {today} 最相关 Top10：\n\n"
         for art in top10:
             body += (
                 f"### {art['title']}\n"
-                f"- 发布: {art.get('pub_date','')}\n"
-                f"- 分数: {art.get('score', 0)}/100\n"
+                f"- 杂志: {art.get('journal','未知')}\n"
+                f"- 发表日期: {art.get('pub_date','未知')}\n"
+                f"- 分数: {art.get('score',0)}/100\n"
                 f"- DOI: {art.get('doi','无')}\n"
                 f"- 链接: {art.get('link','')}\n\n"
             )
         success = create_github_issue(title, body)
         logger.info("Issue 已创建" if success else "Issue 创建失败")
-        
+
     except Exception as e:
         logger.error(f"主流程执行出错: {str(e)}", exc_info=True)
-        # 即使出错也尝试发送Issue，包含错误信息
-        error_title = f"肿瘤克隆演化综述执行出错 - {datetime.now().strftime('%Y-%m-%d')}"
-        error_body = f"## 执行过程中出现错误\n\n```\n{str(e)}\n```\n\n请检查日志获取详细信息。"
+        error_title = f"肿瘤克隆演研究周报执行出错 - {datetime.now().strftime('%Y-%m-%d')}"
+        error_body  = f"## 执行过程中出现错误\n\n```\n{str(e)}\n```\n\n请检查日志获取详细信息。"
         create_github_issue(error_title, error_body)
 
 if __name__ == "__main__":
