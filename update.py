@@ -58,8 +58,28 @@ HIGH_IMPACT_JOURNALS = [
     "Molecular Cell", "Bioinformatics", "Nucleic Acids Research"
 ]
 
+# 高质量研究组和作者列表 - 根据研究领域修改
+HIGH_QUALITY_AUTHORS = [
+    "Sottoriva A", "Markowetz F", "Curtis C", "Michor F", "Swanton C",
+    "Raphael BJ", "Pe'er D", "Shah SP", "Ding L", "Beerenwinkel N",
+    "Hajirasouliha I", "Yuan K", "Boutros PC", "Gerlinger M", "McGranahan N"
+]
+
+# 高质量机构列表 - 根据研究领域修改
+HIGH_QUALITY_INSTITUTIONS = [
+    "Broad Institute", "Memorial Sloan Kettering", "Stanford University",
+    "Dana-Farber", "Francis Crick Institute", "Institute of Cancer Research",
+    "Cold Spring Harbor", "University of Cambridge", "Harvard Medical School",
+    "Washington University", "BC Cancer Agency", "University of Toronto",
+    "Netherlands Cancer Institute", "MD Anderson Cancer Center"
+]
+
 # 高影响力杂志加分
 JOURNAL_IMPACT_BONUS = 10  # 高影响力杂志文章的额外分数
+
+# 高质量来源的额外加分
+AUTHOR_BONUS = 15   # 高质量作者的额外分数
+INSTITUTION_BONUS = 10  # 高质量机构的额外分数
 
 # 预过滤相关度关键词 - 根据研究方向修改
 HIGH_RELEVANCE_KEYWORDS = [
@@ -109,7 +129,7 @@ BATCH_SCORING_USER_PROMPT = """对以下多篇文章进行打分（0-100），�
 {{"article_0": 85, "article_1": 45, ...}}"""
 
 # 检索配置
-DEEP_SEARCH_MONTHS = 12     # 深度检索的时间范围（月）
+DEEP_SEARCH_MONTHS = 24     # 深度检索的时间范围（月）- 从12改为24
 DEEP_SEARCH_RETMAX = 100    # 深度检索的最大文章数
 RECENT_SEARCH_DAYS = 7      # 最近检索的时间范围（天）
 RECENT_SEARCH_RETMAX = 50   # 最近检索的最大文章数
@@ -308,6 +328,23 @@ def fetch_pubmed_from_pmids(pmids):
                 or article.findtext(".//MedlineJournalInfo/JournalTitle")
                 or ""
             )
+            
+            # 提取作者信息
+            authors = []
+            for author in article.findall(".//Author"):
+                last_name = author.findtext("LastName") or ""
+                initials = author.findtext("Initials") or ""
+                if last_name and initials:
+                    authors.append(f"{last_name} {initials}")
+            art["authors"] = authors
+            
+            # 提取机构信息
+            affiliations = []
+            for affiliation in article.findall(".//Affiliation"):
+                if affiliation.text:
+                    affiliations.append(affiliation.text)
+            art["affiliations"] = affiliations
+            
             # 提取完整日期
             pubdate = article.find(".//PubDate")
             if pubdate is not None:
@@ -383,6 +420,20 @@ def fetch_europe_pmc(days=RECENT_SEARCH_DAYS, pageSize=RECENT_SEARCH_RETMAX):
                 "pub_date": item.get("firstPublicationDate", ""),
                 "journal": item.get("journalTitle", "")
             }
+            
+            # 提取作者信息（如果有）
+            authors = []
+            if "authorList" in item and "author" in item["authorList"]:
+                for author in item["authorList"]["author"]:
+                    last_name = author.get("lastName", "")
+                    initials = author.get("initials", "")
+                    if last_name and initials:
+                        authors.append(f"{last_name} {initials}")
+            art["authors"] = authors
+            
+            # 对于Europe PMC，机构信息可能需要额外的API调用，暂时设为空列表
+            art["affiliations"] = []
+            
             results.append(art)
         logger.info(f"Europe PMC检索完成，获取了 {len(results)} 篇文章")
         return results
@@ -410,13 +461,23 @@ def fetch_arxiv(max_results=ARXIV_MAX_RESULTS):
         results = []
         for entry in feed.entries:
             journal_ref = entry.get('arxiv_journal_ref', '')
+            
+            # 提取作者信息
+            authors = []
+            if 'authors' in entry and entry.authors:
+                for author in entry.authors:
+                    if 'name' in author:
+                        authors.append(author.name)
+            
             art = {
                 "title": entry.title,
                 "abstract": entry.summary,
                 "doi": next((l.href for l in entry.links if l.href.startswith("http://dx.doi.org/")), ""),
                 "link": entry.link,
                 "pub_date": entry.published[:10],
-                "journal": journal_ref or "arXiv"
+                "journal": journal_ref or "arXiv",
+                "authors": authors,
+                "affiliations": []  # arXiv通常不提供机构信息
             }
             results.append(art)
         logger.info(f"ArXiv检索完成，获取了 {len(results)} 篇文章")
@@ -591,6 +652,28 @@ def journal_impact_bonus(article):
     
     return 0
 
+def author_institution_bonus(article):
+    """根据高质量作者和机构计算额外分数"""
+    bonus = 0
+    
+    # 检查作者
+    authors = article.get("authors", [])
+    for author in authors:
+        for high_quality_author in HIGH_QUALITY_AUTHORS:
+            if high_quality_author.lower() in author.lower():
+                bonus += AUTHOR_BONUS
+                break  # 一篇文章只计算一次作者加分
+    
+    # 检查机构
+    affiliations = article.get("affiliations", [])
+    for affiliation in affiliations:
+        for high_quality_institution in HIGH_QUALITY_INSTITUTIONS:
+            if high_quality_institution.lower() in affiliation.lower():
+                bonus += INSTITUTION_BONUS
+                break  # 一篇文章只计算一次机构加分
+    
+    return bonus
+
 # === GitHub Issue ===
 def create_github_issue(title, body):
     """创建GitHub Issue来展示结果"""
@@ -674,10 +757,11 @@ def main():
             if "score" not in art:
                 art["score"] = 0
 
-        # 7) 计算最终分数（含高影响力杂志加分）
+        # 7) 计算最终分数（含高影响力杂志加分和作者机构加分）
         for art in merged_articles:
             impact_bonus = journal_impact_bonus(art)
-            art["final_score"] = art.get("score", 0) + impact_bonus
+            quality_bonus = author_institution_bonus(art)
+            art["final_score"] = art.get("score", 0) + impact_bonus + quality_bonus
 
         # 8) 排序获取Top10
         top10 = sorted(merged_articles, key=lambda x: x.get("final_score", 0), reverse=True)[:10]
@@ -690,13 +774,31 @@ def main():
         
         for art in top10:
             is_high_impact = journal_impact_bonus(art) > 0
+            
+            # 提取前三位作者，如果超过三位则添加"等"
+            authors_text = ""
+            if art.get("authors"):
+                authors = art.get("authors")[:3]
+                authors_text = ", ".join(authors)
+                if len(art.get("authors")) > 3:
+                    authors_text += " 等"
+            
+            # 提取主要机构（第一个机构）
+            institution_text = ""
+            if art.get("affiliations") and len(art.get("affiliations")) > 0:
+                institution_text = art.get("affiliations")[0]
+                if len(institution_text) > 100:  # 太长的机构名称截断
+                    institution_text = institution_text[:100] + "..."
+            
             body += (
                 f"### {art['title']}\n"
-                f"- 杂志: {art.get('journal','未知')}{' 🌟' if is_high_impact else ''}\n"
-                f"- 发表日期: {art.get('pub_date','未知')}\n"
-                f"- 相关性分数: {art.get('score',0)}/100\n"
-                f"- DOI: {art.get('doi','无')}\n"
-                f"- 链接: {art.get('link','')}\n\n"
+                f"* 杂志: {art.get('journal','未知')}{' 🌟' if is_high_impact else ''}\n"
+                f"* 作者: {authors_text}\n"
+                f"* 机构: {institution_text}\n"
+                f"* 发表日期: {art.get('pub_date','未知')}\n"
+                f"* 相关性分数: {art.get('score',0)}/100\n"
+                f"* DOI: {art.get('doi','无')}\n"
+                f"* 链接: {art.get('link','')}\n\n"
             )
         
         success = create_github_issue(title, body)
